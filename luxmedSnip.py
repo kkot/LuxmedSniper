@@ -14,6 +14,8 @@ import coloredlogs
 import requests
 import schedule
 
+from src.config import Config
+
 coloredlogs.install(level="INFO")
 log = logging.getLogger("main")
 
@@ -38,8 +40,8 @@ class LuxMedSniper:
     def _get_access_token(self) -> str:
 
         authentication_body = {
-            'username': self.config['luxmed']['email'],
-            'password': self.config['luxmed']['password'],
+            'username': self.config.luxmed.email,
+            'password': self.config.luxmed.password,
             "grant_type": "password",
             "account_id": str(uuid.uuid4())[:35],
             "client_id": str(uuid.uuid4())
@@ -75,7 +77,8 @@ class LuxMedSniper:
             raise Exception(
                 'Cannot open configuration file ({file})!'.format(file=configuration_file))
         try:
-            self.config = yaml.load(config_data, Loader=yaml.FullLoader)
+            loaded_config = yaml.load(config_data, Loader=yaml.FullLoader)
+            self.config = Config(**loaded_config)
         except Exception as yaml_error:
             raise Exception('Configuration problem: {error}'.format(error=yaml_error))
 
@@ -96,23 +99,27 @@ class LuxMedSniper:
 
     def _parseVisitsNewPortal(self, data) -> List[dict]:
         appointments = []
-        (clinicIds, doctorIds) = self.config['luxmedsniper'][
-            'doctor_locator_id'].strip().split('*')[-2:]
+        (clinicIds, doctorIds) = self.config.luxmedsniper.doctor_locator_id.strip().split('*')[-2:]
+
+        excluded_facilities = self.config.luxmedsniper.excluded_facilities
         content = data.json()
         for termForDay in content["termsForService"]["termsForDays"]:
             for term in termForDay["terms"]:
                 doctor = term['doctor']
+                clinic_name: str = term['clinic']
 
                 if doctorIds != '-1' and str(doctor['id']) != doctorIds:
                     continue
                 if clinicIds != '-1' and str(term['clinicId']) != clinicIds:
+                    continue
+                if any([excluded_facility in clinic_name for excluded_facility in excluded_facilities]):
                     continue
 
                 appointments.append(
                     {
                         'AppointmentDate': term['dateTimeFrom'],
                         'ClinicId': term['clinicId'],
-                        'ClinicPublicName': term['clinic'],
+                        'ClinicPublicName': clinic_name,
                         'DoctorName': f'{doctor["academicTitle"]} {doctor["firstName"]} {doctor["lastName"]}',
                         'ServiceId': term['serviceId']
                     }
@@ -121,12 +128,10 @@ class LuxMedSniper:
 
     def _getAppointmentsNewPortal(self):
         try:
-            (cityId, serviceId, clinicIds, doctorIds) = self.config['luxmedsniper'][
-                'doctor_locator_id'].strip().split('*')
+            (cityId, serviceId, clinicIds, doctorIds) = self.config.luxmedsniper.doctor_locator_id.strip().split('*')
         except ValueError:
             raise Exception('DoctorLocatorID seems to be in invalid format')
-        date_to = (datetime.date.today() + datetime.timedelta(
-            days=self.config['luxmedsniper']['lookup_time_days']))
+        date_to = (datetime.date.today() + datetime.timedelta(days=self.config.luxmedsniper.lookup_time_days))
         params = {
             "cityId": cityId,
             "serviceVariantId": serviceId,
@@ -151,29 +156,38 @@ class LuxMedSniper:
             return
         for appointment in appointments:
             self.log.info(
-                "Appointment found! {AppointmentDate} at {ClinicPublicName} - {DoctorName}".format(
-                    **appointment))
+                "Appointment: {AppointmentDate}, {ClinicPublicName}, {DoctorName}".format(
+                    **self._format_appointment(appointment)))
             if not self._isAlreadyKnown(appointment):
                 self._addToDatabase(appointment)
                 self._send_notification(appointment)
                 self.log.info(
-                    "Notification sent! {AppointmentDate} at {ClinicPublicName} - {DoctorName}".format(**appointment))
+                    "Notification sent: {AppointmentDate}, {ClinicPublicName}, {DoctorName}".format(
+                        **self._format_appointment(appointment)))
             else:
-                self.log.info('Notification was already sent.')
+                self.log.debug('Notification was already sent.')
 
     def _addToDatabase(self, appointment):
-        db = shelve.open(self.config['misc']['notifydb'])
+        db = shelve.open(self.config.misc.notifydb)
         notifications = db.get(appointment['DoctorName'], [])
         notifications.append(appointment['AppointmentDate'])
         db[appointment['DoctorName']] = notifications
         db.close()
 
     def _send_notification(self, appointment):
+        appointment = self._format_appointment(appointment)
         for provider in self.notification_providers:
             provider(appointment)
 
+    def _format_appointment(self, appointment):
+        appointment = appointment.copy()
+        date_format = self.config.misc.date_format
+        appointment['AppointmentDate'] = datetime.datetime.fromisoformat(
+            appointment['AppointmentDate']).strftime(date_format)
+        return appointment
+
     def _isAlreadyKnown(self, appointment):
-        db = shelve.open(self.config['misc']['notifydb'])
+        db = shelve.open(self.config.misc.notifydb)
         notifications = db.get(appointment['DoctorName'], [])
         db.close()
         if appointment['AppointmentDate'] in notifications:
@@ -182,44 +196,30 @@ class LuxMedSniper:
 
     def _setup_providers(self):
         self.notification_providers = []
+        chosen_providers = self.config.luxmedsniper.notification_provider
 
-        providers = self.config['luxmedsniper']['notification_provider']
-
-        if "pushover" in providers:
-            pushover_client = PushoverClient(self.config['pushover']['user_key'], self.config['pushover']['api_token'])
-            # pushover_client.send_message("Luxmed Sniper is running!")
-            self.notification_providers.append(
-                lambda appointment: pushover_client.send_message(
-                    self.config['pushover']['message_template'].format(
-                        **appointment, title=self.config['pushover']['title'])))
-        if "slack" in providers:
+        if "pushover" in chosen_providers:
+            from src.pushover_client import PushoverClient
+            config = self.config.pushover
+            pushover_client = PushoverClient(config.user_key, config.api_token)
+            self.notification_providers.append(lambda appointment: pushover_client.send_message(
+                config.message_template.format(**appointment, title=config.title)))
+        if "slack" in chosen_providers:
             from slack_sdk import WebClient
-            client = WebClient(token=self.config['slack']['api_token'])
-            channel = self.config['slack']['channel']
+            config = self.config.slack
+            client = WebClient(token=config.api_token)
+            channel = config.channel
             self.notification_providers.append(
                 lambda appointment: client.chat_postMessage(channel=channel,
-                                                            text=self.config['slack'][
-                                                                'message_template'].format(
-                                                                **appointment))
+                                                            text=config.message_template.format(**appointment))
             )
-        if "pushbullet" in providers:
+        if "pushbullet" in chosen_providers:
             from pushbullet import Pushbullet
-            pb = Pushbullet(self.config['pushbullet']['access_token'])
+            config = self.config.pushbullet
+            pb = Pushbullet(config.access_token)
             self.notification_providers.append(
-                lambda appointment: pb.push_note(title=self.config['pushbullet']['title'],
-                                                 body=self.config['pushbullet'][
-                                                     'message_template'].format(**appointment))
-            )
-        if "gi" in providers:
-            import gi
-            gi.require_version('Notify', '0.7')
-            from gi.repository import Notify
-            # One time initialization of libnotify
-            Notify.init("Luxmed Sniper")
-            self.notification_providers.append(
-                lambda appointment: Notify.Notification.new(
-                    self.config['gi']['message_template'].format(**appointment), None).show()
-            )
+                lambda appointment: pb.push_note(title=config.title,
+                                                 body=config.message_template.format(**appointment)))
 
 
 def work(config):
@@ -232,22 +232,6 @@ def work(config):
 
 class LuxmedSniperException(Exception):
     pass
-
-
-class PushoverClient:
-    def __init__(self, user_key, api_token):
-        self.api_token = api_token
-        self.user_key = user_key
-
-    def send_message(self, message):
-        data = {
-            'token': self.api_token,
-            'user': self.user_key,
-            'message': message
-        }
-        r = requests.post('https://api.pushover.net/1/messages.json', data=data)
-        if r.status_code != 200:
-            raise Exception('Pushover error: %s' % r.text)
 
 
 if __name__ == "__main__":

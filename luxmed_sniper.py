@@ -159,7 +159,8 @@ class LuxMedSniper:
         self.session.headers["authorization-token"] = f"Bearer {token}"
 
     @staticmethod
-    def _parse_visits_new_portal(data, clinic_ids: list[int], doctor_ids: list[int], preferred_hours: tuple[int, int] = None) -> list[dict]:
+    def _parse_visits_new_portal(data, clinic_ids: list[int], doctor_ids: list[int], preferred_hours: tuple[int, int] = None, 
+                                exclude_keywords: list[str] = None) -> list[dict]:
         appointments = []
         content = data.json()
         for termForDay in content["termsForService"]["termsForDays"]:
@@ -180,6 +181,15 @@ class LuxMedSniper:
                     hour = appointment_date.hour
                     if hour < preferred_hours[0] or hour > preferred_hours[1]:
                         continue
+
+                # Create strings for filtering
+                doctor_name = f'{doctor["academicTitle"]} {doctor["firstName"]} {doctor["lastName"]}'.lower()
+                clinic_name = term['clinic'].lower()
+
+                # Exclude appointments if any keyword matches in clinic or doctor name
+                if exclude_keywords and any(keyword.lower() in clinic_name or keyword.lower() in doctor_name 
+                                         for keyword in exclude_keywords):
+                    continue
 
                 appointments.append(
                     {
@@ -211,6 +221,9 @@ class LuxMedSniper:
         if "preferred_hours" in doctor_locator:
             preferred_hours = tuple(doctor_locator["preferred_hours"])
 
+        # Get exclude keywords if specified
+        exclude_keywords = doctor_locator.get("exclude_keywords", None)
+
         params = {
             "searchPlace.id": city_id,
             "searchPlace.type": 0,
@@ -230,7 +243,7 @@ class LuxMedSniper:
         return [
             *filter(
                 lambda appointment: appointment["AppointmentDate"].date() <= date_to,
-                self._parse_visits_new_portal(response, clinic_ids, doctor_ids, preferred_hours),
+                self._parse_visits_new_portal(response, clinic_ids, doctor_ids, preferred_hours, exclude_keywords),
             )
         ]
 

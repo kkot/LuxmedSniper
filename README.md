@@ -19,6 +19,7 @@ luxmedsniper:
       name: Your unique search name
       enabled: False  # temporary disable from searching
       preferred_hours: [8, 16]  # Optional: specify preferred hours range (inclusive) in 24h format
+      exclude_keywords: ["Mokotów", "Stażysta"]  # Optional: exclude appointments where clinic or doctor name contains any of these keywords
     - id: 1*7681*-1*-1
       name: Your unique search name 2
       enabled: True
@@ -46,6 +47,7 @@ nohup python3 luxmed_sniper.py -c user_config.yml luxmed_john.yml &
 Configuration Options
 --------------------
 - `preferred_hours`: Optional list of two integers specifying the preferred time range for appointments in 24-hour format. For example, `[8, 16]` will only show appointments between 8:00 and 16:59. The range is inclusive.
+- `exclude_keywords`: Optional list of strings to exclude appointments based on clinic or doctor name. If any keyword matches either the clinic name or doctor name (case-insensitive), the appointment will be excluded.
 
 # Warning
 

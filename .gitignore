@@ -111,3 +111,5 @@ local-*.yaml
 *.bak
 *.dat
 *.dir
+
+notifications-*.db*

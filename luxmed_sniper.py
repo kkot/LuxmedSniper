@@ -159,7 +159,7 @@ class LuxMedSniper:
         self.session.headers["authorization-token"] = f"Bearer {token}"
 
     @staticmethod
-    def _parse_visits_new_portal(data, clinic_ids: list[int], doctor_ids: list[int]) -> list[dict]:
+    def _parse_visits_new_portal(data, clinic_ids: list[int], doctor_ids: list[int], preferred_hours: tuple[int, int] = None) -> list[dict]:
         appointments = []
         content = data.json()
         for termForDay in content["termsForService"]["termsForDays"]:
@@ -173,9 +173,17 @@ class LuxMedSniper:
                 if clinic_ids and clinic_id not in clinic_ids:
                     continue
 
+                appointment_date = datetime.datetime.fromisoformat(term['dateTimeFrom'])
+                
+                # Filter by preferred hours if specified
+                if preferred_hours is not None:
+                    hour = appointment_date.hour
+                    if hour < preferred_hours[0] or hour > preferred_hours[1]:
+                        continue
+
                 appointments.append(
                     {
-                        'AppointmentDate': datetime.datetime.fromisoformat(term['dateTimeFrom']),
+                        'AppointmentDate': appointment_date,
                         'ClinicId': term['clinicId'],
                         'ClinicPublicName': term['clinic'],
                         'DoctorName': f'{doctor["academicTitle"]} {doctor["firstName"]} {doctor["lastName"]}',
@@ -198,6 +206,11 @@ class LuxMedSniper:
         lookup_days = self.config["luxmedsniper"]["lookup_time_days"]
         date_to = datetime.date.today() + datetime.timedelta(days=lookup_days)
 
+        # Get preferred hours from config if specified
+        preferred_hours = None
+        if "preferred_hours" in doctor_locator:
+            preferred_hours = tuple(doctor_locator["preferred_hours"])
+
         params = {
             "searchPlace.id": city_id,
             "searchPlace.type": 0,
@@ -217,7 +230,7 @@ class LuxMedSniper:
         return [
             *filter(
                 lambda appointment: appointment["AppointmentDate"].date() <= date_to,
-                self._parse_visits_new_portal(response, clinic_ids, doctor_ids),
+                self._parse_visits_new_portal(response, clinic_ids, doctor_ids, preferred_hours),
             )
         ]
 

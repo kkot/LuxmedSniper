@@ -18,9 +18,11 @@ luxmedsniper:
       # You can get those ids by calling script with "--dump-ids" argument: python3 luxmed_sniper.py --dump-ids
       name: Your unique search name
       enabled: False  # temporary disable from searching
+      preferred_hours: [8, 16]  # Optional: specify preferred hours range (inclusive) in 24h format
     - id: 1*7681*-1*-1
       name: Your unique search name 2
       enabled: True
+      preferred_hours: [9, 14]  # This will look for appointments between 9:00 and 14:59
   lookup_time_days: 14 # How many days from now should script look at.
 pushover:
   user_key: # Your pushover.net user key
@@ -40,6 +42,10 @@ or you can split the configuration into separate users/doctors/providers config 
 nohup python3 luxmed_sniper.py -c user_config.yml luxmed_john.yml &
 ```
 3) Wait for new appointment notifications in your pushover app on mobile :)!
+
+Configuration Options
+--------------------
+- `preferred_hours`: Optional list of two integers specifying the preferred time range for appointments in 24-hour format. For example, `[8, 16]` will only show appointments between 8:00 and 16:59. The range is inclusive.
 
 # Warning
 

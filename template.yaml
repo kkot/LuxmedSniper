@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for LuxMed Sniper Lambda function'
+
+Resources:
+  LuxMedSniperLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LuxMedSniperLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: LuxMedSniper
+      Handler: lambda_handler.handler
+      Role: !GetAtt LuxMedSniperLambdaRole.Arn
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          CONFIG_FILE: luxmed_sniper.yaml
+          ACCOUNT_FILE: account.yaml
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+
+  LuxMedSniperScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: LuxMedSniperScheduleRule
+      Description: 'Rule to trigger LuxMed Sniper Lambda every 60 seconds'
+      ScheduleExpression: 'rate(1 minute)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt LuxMedSniperLambdaFunction.Arn
+          Id: LuxMedSniperLambdaTarget
+
+  LuxMedSniperLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LuxMedSniperLambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LuxMedSniperScheduleRule.Arn
+
+Parameters:
+  LambdaCodeBucket:
+    Type: String
+    Description: 'S3 bucket containing the Lambda code package'
+  
+  LambdaCodeKey:
+    Type: String
+    Description: 'S3 key for the Lambda code package'
+
+Outputs:
+  LuxMedSniperLambdaFunction:
+    Description: 'LuxMed Sniper Lambda Function ARN'
+    Value: !GetAtt LuxMedSniperLambdaFunction.Arn
+  
+  LuxMedSniperLambdaRole:
+    Description: 'IAM Role for LuxMed Sniper Lambda'
+    Value: !GetAtt LuxMedSniperLambdaRole.Arn 

@@ -42,12 +42,27 @@ or you can split the configuration into separate users/doctors/providers config 
 ```
 nohup python3 luxmed_sniper.py -c user_config.yml luxmed_john.yml &
 ```
+
+You can also run the script once and exit (without continuous checking):
+```
+python3 luxmed_sniper.py --once -c /path/to/luxmed_john.yml
+```
+
 3) Wait for new appointment notifications in your pushover app on mobile :)!
 
 Configuration Options
 --------------------
 - `preferred_hours`: Optional list of two integers specifying the preferred time range for appointments in 24-hour format. For example, `[8, 16]` will only show appointments between 8:00 and 16:59. The range is inclusive.
 - `exclude_keywords`: Optional list of strings to exclude appointments based on clinic or doctor name. If any keyword matches either the clinic name or doctor name (case-insensitive), the appointment will be excluded.
+
+Command Line Options
+--------------------
+- `-c, --config`: Configuration file path(s). You can specify multiple configuration files.
+- `-d, --delay`: Delay in seconds between fetching updates (default: 30).
+- `--once`: Run the script only once and exit (without continuous checking).
+- `--dump-ids`: Dump current IDs for cities, services, facilities, and doctors.
+- `--dump-ids-city`: Dump facilities and doctors only from a specific city (wildcard pattern).
+- `--dump-ids-doctors`: Dump facilities and doctors information (requires many requests).
 
 # Warning
 

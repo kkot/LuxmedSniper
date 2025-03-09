@@ -446,6 +446,10 @@ if __name__ == "__main__":
         "-d", "--delay",
         type=int, help="Delay in fetching updates [s]", default=30
     )
+    parser.add_argument(
+        "--once",
+        action='store_true', help="Run only once and exit", default=False
+    )
     group = parser.add_argument_group('dump-ids')
     group.add_argument(
         "--dump-ids",
@@ -464,6 +468,9 @@ if __name__ == "__main__":
     if args.dump_ids is True:
         logger.info(f'Dumping IDs')
         dump_current_ids(args.config, args.dump_ids_city, args.dump_ids_doctors)
+    elif args.once:
+        logger.info("Running once and exiting")
+        work(args.config)
     else:
         logger.info(f'Start working every: {args.delay} s')
         work(args.config)

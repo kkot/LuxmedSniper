@@ -4,7 +4,7 @@ set -e
 # Configuration - change these values as needed
 FUNCTION_NAME="LuxMedSniper"
 REGION="eu-west-1"
-HOURS=24
+HOURS=1
 
 # Calculate start time (last 24 hours by default)
 START_TIME=$(date -u -v-${HOURS}H +%s000 2>/dev/null || date -u -d "-${HOURS} hours" +%s000)
@@ -19,7 +19,6 @@ echo "-------------------------------------------"
 STREAMS=$(aws logs describe-log-streams \
   --log-group-name "$LOG_GROUP_NAME" \
   --order-by LastEventTime \
-  --descending \
   --region "$REGION" \
   --query "logStreams[*].logStreamName" \
   --output text)
@@ -40,19 +39,10 @@ for STREAM in $STREAMS; do
     --log-stream-name "$STREAM" \
     --start-time "$START_TIME" \
     --region "$REGION" \
-    --query "events[*].[timestamp,message]" \
-    --output text | while read -r TIMESTAMP MESSAGE; do
-      # Convert timestamp to human-readable format - handle empty timestamps
-      if [[ -n "$TIMESTAMP" && "$TIMESTAMP" =~ ^[0-9]+$ ]]; then
-        # Divide by 1000 to convert milliseconds to seconds
-        SECONDS=$((TIMESTAMP / 1000))
-        DATE=$(date -r "$SECONDS" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || date -d "@$SECONDS" "+%Y-%m-%d %H:%M:%S")
-        echo "[$DATE] $MESSAGE"
-      else
-        # If timestamp is not a number, just print the message
-        echo "$MESSAGE"
-      fi
-    done
-  
+    --query "events[*].[message]" \
+    --output text \
+    --no-cli-pager
+    
+
   echo "-------------------------------------------"
 done 

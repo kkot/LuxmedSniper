@@ -116,3 +116,7 @@ notifications-*.db*
 
 # Credentials
 account.yaml
+
+# deploy
+luxmed-sniper-lambda
+luxmed-sniper-lambda.zip

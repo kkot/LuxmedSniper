@@ -294,7 +294,7 @@ class LuxMedSniper:
                             "Notification sent for: {app_name}! {AppointmentDate} at {ClinicPublicName} - {DoctorName}".format(
                                 **appointment, app_name=doctor_locator['name']))
                     else:
-                        logger.info(f'Notification was already sent for: {doctor_locator['name']}')
+                        logger.info(f"Notification was already sent for: {doctor_locator['name']}")
             except Exception as e:
                 logger.error(f'Looking for appointments for {doctor_locator} failed, reason: {e}')
 
@@ -368,17 +368,17 @@ def setup_logging() -> None:
     requests_log.setLevel(logging.DEBUG)
     requests_log.propagate = True
 
+    # Configure loguru
     loguru_config = {
         "handlers": [
             {"sink": sys.stdout, "level": "INFO"},
-            {
-                "sink": "debug.log",
-                "format": "{time} - {message}",
-                "serialize": True,
-                "rotation": "1 week",
-            },
         ]
     }
+    
+    # Remove all existing handlers before configuring
+    logger.remove()
+    
+    # Configure with new handlers
     logger.configure(handlers=loguru_config["handlers"])
 
 

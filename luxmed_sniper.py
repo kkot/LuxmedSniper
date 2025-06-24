@@ -444,7 +444,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d", "--delay",
-        type=int, help="Delay in fetching updates [s]", default=30
+        type=int, help="Delay in fetching updates [s]", default=120
     )
     parser.add_argument(
         "--once",

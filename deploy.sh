@@ -18,7 +18,8 @@ cp luxmed_sniper.py lambda_handler.py luxmed_sniper.yaml account.yaml "$TEMP_DIR
 echo "Copied files to temporary directory"
 
 # Install dependencies to the temporary directory
-pip install -r requirements.txt -t "$TEMP_DIR/"
+# Lambda runs Linux x86_64 / Python 3.11 - fetch matching wheels (pydantic_core is a compiled extension)
+pip install -r requirements.txt -t "$TEMP_DIR/" --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all:
 echo "Installed dependencies"
 
 # Create a zip file

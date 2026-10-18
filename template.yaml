@@ -36,8 +36,8 @@ Resources:
     Type: AWS::Events::Rule
     Properties:
       Name: LuxMedSniperScheduleRule
-      Description: 'Rule to trigger LuxMed Sniper Lambda every 60 seconds'
-      ScheduleExpression: 'rate(1 minute)'
+      Description: 'Rule to trigger LuxMed Sniper Lambda every 10 minutes'
+      ScheduleExpression: 'rate(10 minutes)'
       State: ENABLED
       Targets:
         - Arn: !GetAtt LuxMedSniperLambdaFunction.Arn

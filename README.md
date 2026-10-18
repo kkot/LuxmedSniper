@@ -34,6 +34,8 @@ misc:
   notifydb: ./notifications-{email}.db # State file used to remember which notifications has been sent already
 ```
 
+With pushover enabled you also get one alert when runs start failing (e.g. login errors) and one when they recover.
+
 2) Run it
 ```
 nohup python3 luxmed_sniper.py -c /path/to/luxmed_john.yml &

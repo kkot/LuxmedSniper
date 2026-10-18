@@ -175,16 +175,7 @@ class LuxMedSniper:
 
             def pushover_callback(doctor_locator: DoctorLocator, appointment: Appointment) -> None:
                 message = self._format_message(self.config["pushover"]["message_template"], doctor_locator, appointment)
-                data = {
-                    "token": pushover_api_token,
-                    "user": pushover_user_key,
-                    "message": message,
-                    "title": self.config["pushover"]["title"],
-                }
-                response = requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=10)
-                if response.status_code != requests.codes["ok"]:
-                    err_msg = f"Pushover error: {response.text}"
-                    raise LuxmedSniperError(err_msg)
+                send_pushover(pushover_api_token, pushover_user_key, self.config["pushover"]["title"], message)
 
             notification_providers.append(pushover_callback)
         if "slack" in providers:
@@ -427,7 +418,9 @@ class LuxMedSniper:
             except Exception as e:
                 logger.exception(f"Sending notification failed, reason: {e}")
 
-    def check(self) -> None:
+    def check(self) -> list[str]:
+        """Look for appointments, returning descriptions of the doctor locators that failed."""
+        failures: list[str] = []
         doctor_locator_dict: dict[str, Any]
         for doctor_locator_dict in self.config["luxmedsniper"]["doctor_locators"]:
             doctor_locator = DoctorLocator.model_validate(
@@ -463,6 +456,8 @@ class LuxMedSniper:
                         logger.info(f"Notification was already sent for: {doctor_locator.name}")
             except Exception as e:
                 logger.exception(f"Looking for appointments for {doctor_locator} failed, reason: {e}")
+                failures.append(f"{doctor_locator.name}: {type(e).__name__}: {e}")
+        return failures
 
     def get_cities(self) -> list[dict]:
         response = self.session.get(
@@ -493,6 +488,47 @@ class LuxMedSniper:
 
 class LuxmedSniperError(Exception):
     pass
+
+
+def send_pushover(api_token: str, user_key: str, title: str, message: str) -> None:
+    data = {
+        "token": api_token,
+        "user": user_key,
+        "message": message,
+        "title": title,
+    }
+    response = requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=10)
+    if response.status_code != requests.codes["ok"]:
+        err_msg = f"Pushover error: {response.text}"
+        raise LuxmedSniperError(err_msg)
+
+
+class FailureAlerts:
+    """Pushover alert when runs start failing, and again when they recover.
+    A marker file next to notifydb remembers that the alert was sent, so it isn't repeated every run."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.enabled = "pushover" in config["luxmedsniper"]["notification_provider"]
+        self.pushover = config.get("pushover", {})
+        self.marker = Path(config["misc"]["notifydb"]).with_name("luxmed-failure-alerted")
+
+    def _send(self, title: str, message: str) -> bool:
+        try:
+            send_pushover(self.pushover["api_token"], self.pushover["user_key"], title, message[:1000])
+        except Exception as e:
+            logger.exception(f"Sending failure alert failed, reason: {e}")
+            return False
+        return True
+
+    def failure(self, error: str) -> None:
+        # Only mark as alerted once the alert actually went out, so a Pushover outage retries next run
+        if self.enabled and not self.marker.exists() and self._send("LuxmedSniper is failing", error):
+            self.marker.touch()
+
+    def success(self) -> None:
+        if self.marker.exists():
+            self._send("LuxmedSniper recovered", "Working again")
+            self.marker.unlink()
 
 
 def setup_logging() -> None:
@@ -570,10 +606,22 @@ def dump_current_ids(config, city_wildcard: str | None, dump_ids_doctors: bool) 
 
 def work(config: list[str]) -> None:
     try:
-        luxmed_sniper = LuxMedSniper(config)
-        luxmed_sniper.check()
-    except LuxmedSniperError as s:
-        logger.exception(s)
+        alerts = FailureAlerts(LuxMedSniper._load_configuration(config))
+    except Exception as e:
+        logger.exception(f"Loading configuration failed, reason: {e}")
+        return
+
+    # Catch everything so a single failed run doesn't stop the schedule loop
+    try:
+        failures = LuxMedSniper(config).check()
+    except Exception as e:
+        logger.exception(e)
+        failures = [f"{type(e).__name__}: {e}"]
+
+    if failures:
+        alerts.failure("\n".join(failures))
+    else:
+        alerts.success()
 
 
 if __name__ == "__main__":

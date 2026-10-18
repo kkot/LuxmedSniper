@@ -106,6 +106,8 @@ venv.bak/
 # local
 local-*.yaml
 .idea
+configs
+data
 
 # shelve files
 *.bak
@@ -120,3 +122,6 @@ account.yaml
 # deploy
 luxmed-sniper-lambda
 luxmed-sniper-lambda.zip
+
+# luxmed sniper specific files
+cities.json

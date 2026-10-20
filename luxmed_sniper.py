@@ -382,11 +382,15 @@ class LuxMedSniper:
 
         # Drop slots that are already in the past - they can't be offered again
         now = datetime.datetime.now(tz=datetime.UTC)
-        db = {
-            key: future
-            for key, dates in db.items()
-            if (future := [d for d in dates if datetime.datetime.fromisoformat(d) > now])
-        }
+
+        def is_future(d: str) -> bool:
+            try:
+                return datetime.datetime.fromisoformat(d) > now
+            except (ValueError, TypeError):
+                logger.warning(f"Dropping unparseable database entry: {d!r}")
+                return False
+
+        db = {key: future for key, dates in db.items() if (future := [d for d in dates if is_future(d)])}
 
         # class DateTimeEncoder(json.JSONEncoder):
         #     def default(self, obj):
@@ -418,6 +422,8 @@ class LuxMedSniper:
         return appointment.AppointmentDate in notifications
 
     def _send_notification(self, doctor_locator: DoctorLocator, appointment: Appointment) -> None:
+        """Notify every provider; raise if any of them failed so the slot is retried next run."""
+        errors: list[str] = []
         for provider in self.notification_providers:
             try:
                 result = provider(doctor_locator, appointment)
@@ -425,6 +431,9 @@ class LuxMedSniper:
                     asyncio.run(result)
             except Exception as e:
                 logger.exception(f"Sending notification failed, reason: {e}")
+                errors.append(f"{type(e).__name__}: {e}")
+        if errors:
+            raise RuntimeError(f"Sending notification failed: {'; '.join(errors)}")
 
     def check(self) -> list[str]:
         """Look for appointments, returning descriptions of the doctor locators that failed."""
@@ -452,8 +461,8 @@ class LuxMedSniper:
                         ),
                     )
                     if not self._is_already_known(appointment):
-                        self._add_to_database(appointment)
                         self._send_notification(doctor_locator, appointment)
+                        self._add_to_database(appointment)
                         logger.info(
                             "Notification sent for: {app_name}! {AppointmentDate} at {ClinicPublicName} - {DoctorName}".format(
                                 **appointment.__dict__,

@@ -1,0 +1,4 @@
+{
+    "vim.smartRelativeLine": true,
+    "vim.useSystemClipboard": true
+}

@@ -34,6 +34,8 @@ class DoctorLocator(BaseModel):
     service_id: str
     clinic_ids: list[int] = Field(default_factory=list)
     doctor_ids: list[int] = Field(default_factory=list)
+    preferred_hours: tuple[int, int] | None = None
+    exclude_keywords: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -172,17 +174,8 @@ class LuxMedSniper:
             pushover_api_token = self.config["pushover"]["api_token"]
 
             def pushover_callback(doctor_locator: DoctorLocator, appointment: Appointment) -> None:
-                message = self.config["pushover"]["message_template"].format(**appointment.__dict__)
-                data = {
-                    "token": pushover_api_token,
-                    "user": pushover_user_key,
-                    "message": message,
-                    "title": self.config["pushover"]["title"],
-                }
-                response = requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=10)
-                if response.status_code != requests.codes["ok"]:
-                    err_msg = f"Pushover error: {response.text}"
-                    raise LuxmedSniperError(err_msg)
+                message = self._format_message(self.config["pushover"]["message_template"], doctor_locator, appointment)
+                send_pushover(pushover_api_token, pushover_user_key, self.config["pushover"]["title"], message)
 
             notification_providers.append(pushover_callback)
         if "slack" in providers:
@@ -304,11 +297,29 @@ class LuxMedSniper:
                 if doctor_locator_id.clinic_ids and clinic_id not in doctor_locator_id.clinic_ids:
                     continue
 
+                appointment_date = datetime.datetime.fromisoformat(term["dateTimeFrom"]).replace(
+                    tzinfo=ZoneInfo("Europe/Warsaw"),
+                )
+
+                # Filter by preferred hours if specified
+                preferred_hours = doctor_locator_id.preferred_hours
+                if preferred_hours is not None:
+                    hour = appointment_date.hour
+                    if hour < preferred_hours[0] or hour > preferred_hours[1]:
+                        continue
+
+                # Create strings for filtering
+                doctor_name = f'{doctor["academicTitle"]} {doctor["firstName"]} {doctor["lastName"]}'.lower()
+                clinic_name = term['clinic'].lower()
+
+                # Exclude appointments if any keyword matches in clinic or doctor name
+                if any(keyword.lower() in clinic_name or keyword.lower() in doctor_name
+                       for keyword in doctor_locator_id.exclude_keywords):
+                    continue
+
                 appointments.append(
                     Appointment(
-                        datetime.datetime.fromisoformat(term["dateTimeFrom"]).replace(
-                            tzinfo=ZoneInfo("Europe/Warsaw"),
-                        ),
+                        appointment_date,
                         term["clinicId"],
                         term["clinic"],
                         f"{doctor['academicTitle']} {doctor['firstName']} {doctor['lastName']}",
@@ -369,6 +380,18 @@ class LuxMedSniper:
         notifications.append(appointment.AppointmentDate.isoformat())
         db[db_key] = notifications
 
+        # Drop slots that are already in the past - they can't be offered again
+        now = datetime.datetime.now(tz=datetime.UTC)
+
+        def is_future(d: str) -> bool:
+            try:
+                return datetime.datetime.fromisoformat(d) > now
+            except (ValueError, TypeError):
+                logger.warning(f"Dropping unparseable database entry: {d!r}")
+                return False
+
+        db = {key: future for key, dates in db.items() if (future := [d for d in dates if is_future(d)])}
+
         # class DateTimeEncoder(json.JSONEncoder):
         #     def default(self, obj):
         #         if isinstance(obj, datetime.datetime):
@@ -399,6 +422,8 @@ class LuxMedSniper:
         return appointment.AppointmentDate in notifications
 
     def _send_notification(self, doctor_locator: DoctorLocator, appointment: Appointment) -> None:
+        """Notify every provider; raise if any of them failed so the slot is retried next run."""
+        errors: list[str] = []
         for provider in self.notification_providers:
             try:
                 result = provider(doctor_locator, appointment)
@@ -406,8 +431,13 @@ class LuxMedSniper:
                     asyncio.run(result)
             except Exception as e:
                 logger.exception(f"Sending notification failed, reason: {e}")
+                errors.append(f"{type(e).__name__}: {e}")
+        if errors:
+            raise RuntimeError(f"Sending notification failed: {'; '.join(errors)}")
 
-    def check(self) -> None:
+    def check(self) -> list[str]:
+        """Look for appointments, returning descriptions of the doctor locators that failed."""
+        failures: list[str] = []
         doctor_locator_dict: dict[str, Any]
         for doctor_locator_dict in self.config["luxmedsniper"]["doctor_locators"]:
             doctor_locator = DoctorLocator.model_validate(
@@ -431,8 +461,8 @@ class LuxMedSniper:
                         ),
                     )
                     if not self._is_already_known(appointment):
-                        self._add_to_database(appointment)
                         self._send_notification(doctor_locator, appointment)
+                        self._add_to_database(appointment)
                         logger.info(
                             "Notification sent for: {app_name}! {AppointmentDate} at {ClinicPublicName} - {DoctorName}".format(
                                 **appointment.__dict__,
@@ -443,6 +473,8 @@ class LuxMedSniper:
                         logger.info(f"Notification was already sent for: {doctor_locator.name}")
             except Exception as e:
                 logger.exception(f"Looking for appointments for {doctor_locator} failed, reason: {e}")
+                failures.append(f"{doctor_locator.name}: {type(e).__name__}: {e}")
+        return failures
 
     def get_cities(self) -> list[dict]:
         response = self.session.get(
@@ -475,6 +507,49 @@ class LuxmedSniperError(Exception):
     pass
 
 
+def send_pushover(api_token: str, user_key: str, title: str, message: str) -> None:
+    data = {
+        "token": api_token,
+        "user": user_key,
+        "message": message,
+        "title": title,
+    }
+    response = requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=10)
+    if response.status_code != requests.codes["ok"]:
+        err_msg = f"Pushover error: {response.text}"
+        raise LuxmedSniperError(err_msg)
+
+
+class FailureAlerts:
+    """Pushover alert when runs start failing, and again when they recover.
+    A marker file next to notifydb remembers that the alert was sent, so it isn't repeated every run."""
+
+    MARKER_NAME = "luxmed-failure-alerted"
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.enabled = "pushover" in config["luxmedsniper"]["notification_provider"]
+        self.pushover = config.get("pushover", {})
+        self.marker = Path(config["misc"]["notifydb"]).with_name(self.MARKER_NAME)
+
+    def _send(self, title: str, message: str) -> bool:
+        try:
+            send_pushover(self.pushover["api_token"], self.pushover["user_key"], title, message[:1000])
+        except Exception as e:
+            logger.exception(f"Sending failure alert failed, reason: {e}")
+            return False
+        return True
+
+    def failure(self, error: str) -> None:
+        # Only mark as alerted once the alert actually went out, so a Pushover outage retries next run
+        if self.enabled and not self.marker.exists() and self._send("LuxmedSniper is failing", error):
+            self.marker.touch()
+
+    def success(self) -> None:
+        if self.marker.exists():
+            self._send("LuxmedSniper recovered", "Working again")
+            self.marker.unlink()
+
+
 def setup_logging() -> None:
     class InterceptHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
@@ -498,9 +573,9 @@ def setup_logging() -> None:
     requests_log.setLevel(logging.DEBUG)
     requests_log.propagate = True
 
+    # stdout only - no debug.log file, Lambda's filesystem is read-only
     handlers = [
         dict(sink=sys.stdout, level=os.environ.get("LOGURU_LEVEL", "INFO")),
-        dict(sink="debug.log", format="{time} - {message}", serialize=True, rotation="1 week"),
     ]
     logger.configure(handlers=handlers)
 
@@ -550,10 +625,22 @@ def dump_current_ids(config, city_wildcard: str | None, dump_ids_doctors: bool) 
 
 def work(config: list[str]) -> None:
     try:
-        luxmed_sniper = LuxMedSniper(config)
-        luxmed_sniper.check()
-    except LuxmedSniperError as s:
-        logger.exception(s)
+        alerts = FailureAlerts(LuxMedSniper._load_configuration(config))
+    except Exception as e:
+        logger.exception(f"Loading configuration failed, reason: {e}")
+        return
+
+    # Catch everything so a single failed run doesn't stop the schedule loop
+    try:
+        failures = LuxMedSniper(config).check()
+    except Exception as e:
+        logger.exception(e)
+        failures = [f"{type(e).__name__}: {e}"]
+
+    if failures:
+        alerts.failure("\n".join(failures))
+    else:
+        alerts.success()
 
 
 if __name__ == "__main__":
@@ -567,7 +654,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d", "--delay",
-        type=int, help="Delay in fetching updates [s]", default=1800
+        type=int, help="Delay in fetching updates [s]", default=120
+    )
+    parser.add_argument(
+        "--once",
+        action='store_true', help="Run only once and exit", default=False
     )
     group = parser.add_argument_group('dump-ids')
     group.add_argument(
@@ -587,6 +678,9 @@ if __name__ == "__main__":
     if args.dump_ids is True:
         logger.info(f'Dumping IDs')
         dump_current_ids(args.config, args.dump_ids_city, args.dump_ids_doctors)
+    elif args.once:
+        logger.info("Running once and exiting")
+        work(args.config)
     else:
         logger.info(f'Start working every: {args.delay} s')
         work(args.config)

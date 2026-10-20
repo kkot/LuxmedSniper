@@ -380,6 +380,14 @@ class LuxMedSniper:
         notifications.append(appointment.AppointmentDate.isoformat())
         db[db_key] = notifications
 
+        # Drop slots that are already in the past - they can't be offered again
+        now = datetime.datetime.now(tz=datetime.UTC)
+        db = {
+            key: future
+            for key, dates in db.items()
+            if (future := [d for d in dates if datetime.datetime.fromisoformat(d) > now])
+        }
+
         # class DateTimeEncoder(json.JSONEncoder):
         #     def default(self, obj):
         #         if isinstance(obj, datetime.datetime):
@@ -507,10 +515,12 @@ class FailureAlerts:
     """Pushover alert when runs start failing, and again when they recover.
     A marker file next to notifydb remembers that the alert was sent, so it isn't repeated every run."""
 
+    MARKER_NAME = "luxmed-failure-alerted"
+
     def __init__(self, config: dict[str, Any]) -> None:
         self.enabled = "pushover" in config["luxmedsniper"]["notification_provider"]
         self.pushover = config.get("pushover", {})
-        self.marker = Path(config["misc"]["notifydb"]).with_name("luxmed-failure-alerted")
+        self.marker = Path(config["misc"]["notifydb"]).with_name(self.MARKER_NAME)
 
     def _send(self, title: str, message: str) -> bool:
         try:
